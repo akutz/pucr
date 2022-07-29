@@ -1,0 +1,7 @@
+---
+apiVersion: vmware.com/v1alpha1
+kind: Task
+metadata:
+  name: my-task
+spec:
+  id: my-required-id

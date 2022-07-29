@@ -1,0 +1,130 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tasks.vmware.com
+spec:
+  group: vmware.com
+  names:
+    kind: Task
+    listKind: TaskList
+    plural: tasks
+    singular: task
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Task is the Schema for the tasks API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            x-kubernetes-preserve-unknown-fields: true
+            description: TaskSpec is the desired state for the tasks API.
+            properties:
+              id:
+                description: ID is the unique value by which the task is
+                  identified.
+                minimum: 1
+                type: string
+            required:
+            - id
+            type: object
+          status:
+            description: TaskStatus is the observed state of the tasks API.
+            type: object
+        required:
+        - spec
+        type: object
+    subresources:
+      status: {}
+    served: true
+    storage: false
+    deprecated: true
+    deprecationWarning: use v1alpha2 instead, this version causes your data
+      center to catch fire when used on Tuesdays
+  - name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: Task is the Schema for the tasks API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            x-kubernetes-preserve-unknown-fields: true
+            description: TaskSpec is the desired state for the tasks API.
+            properties:
+              id:
+                description: ID is the unique value by which the task is
+                  identified.
+                minimum: 1
+                type: string
+              name:
+                description: Name is a friendly way to refer to the task.
+                type: string
+              operationID:
+                description: OperationID is the external ID used to track the
+                  associated operation that spawned this task.
+                type: string
+            required:
+            - id
+            - operationID
+            type: object
+          status:
+            description: TaskStatus is the observed state of the tasks API.
+            type: object
+            properties:
+              phase:
+                description: Phase describes the current status of the task.
+                type: string
+        required:
+        - spec
+        type: object
+    subresources:
+      status: {}
+    served: true
+    storage: true
+  conversion:
+    # a Webhook strategy instruct API server to call an external webhook for any
+    # conversion between custom resources.
+    strategy: Webhook
+    # webhook is required when strategy is `Webhook` and it configures the
+    # webhook endpoint to be called by API server.
+    webhook:
+      # conversionReviewVersions indicates what ConversionReview versions are
+      # understood/preferred by the webhook.
+      #
+      # The first version in the list understood by the API server is sent to
+      # the webhook.
+      #
+      # The webhook must respond with a ConversionReview object in the same
+      # version it received.
+      conversionReviewVersions: ["v1beta1", "v1alpha2","v1alpha1"]
+      clientConfig:
+        service:
+          namespace: default
+          name: tasks-conversion-webhook-server
+          path: /crdconvert
+          port: 9443
+        caBundle: "CA_BUNDLE_BASE_64"
