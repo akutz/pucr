@@ -1,0 +1,12 @@
+spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      conversionReviewVersions: ["v1beta1", "v1alpha2","v1alpha1"]
+      clientConfig:
+        service:
+          namespace: default
+          name: tasks-conversion-webhook
+          path: /crdconvert
+          port: 9443
+        caBundle: Cg==

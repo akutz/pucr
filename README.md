@@ -1,28 +1,48 @@
-# CRDs the hard way
+# Patching/updating CRs (pucr) at different versions
 
-A lot of people use Kubernetes these days, and just as many people, as well as organizations, rely on Kubernetes custom resource definitions (CRD) as the basis of a project's application programming interface (API) layer. However, working with CRDs is often abstracted away by tooling such as Client-Go, Controller-Runtime, and Controller-Tools. While these are amazing projects, this repository aims to teach readers how CRDs work with manual, hands-on experience without any frameworks getting between you and the CRDs.
+This repository includes a comprehensive test plan to illustrate the observed, unanticipated outcomes that occur when patching and/or updating Kubernetes custom resources at different versions.
 
-* [**Labs**](#labs): a step-by-step walkthrough of the topics
-* [**FAQ**](#FAQ): answers to frequently asked questions
-* [**Links**](#links): links to related reference material
-* [**Appendix**](#appendix): in-repo reference material
+* [**Test plan**](#test-plan): the test plan
+* [**Prerequisites**](#prerequisite): requirements to run the test plan
+* [**Getting started**](#getting-started): set up the world
+* [**Running the tests**](#running-the-tests): executing the test plan
+* [**Conclusion**](#conclusion): the results of the executed test plan
 
-
-## Labs
-
-1. [**Prerequisites**](./docs/01-prereqs/): how to get from here to there
-1. [**Tasks APIs**](./docs/02-tasks-api/): your first crd
-1. [**CRD versions**](./docs/03-versions/): multiple versions of a crd
-1. [**Conversion webhook**](./docs/04-conversion-webhook/): converting between multiple versions of a crd
-
-## FAQ
+## Test plan
 
 Lorem ipsum.
 
-## Links
+## Prerequisites
+
+The following requirements are necessary to run the examples in the test plan:
+
+* Docker 20.10+
+* GNU Make 4.2+
+
+## Getting started
+
+1. Build the docker image locally:
+
+    ```shell
+    make image-build
+    ```
+
+1. Run the docker image:
+
+    ---
+
+    **Please note** the container runs with elevated privileges to bind mount the host's docker socket in order to support running Kind from within the container.
+
+    ---
+
+    ```shell
+    make image-run
+    ```
+
+## Running the tests
 
 Lorem ipsum.
 
-## Appendix
+## Conclusion
 
 Lorem ipsum.

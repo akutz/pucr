@@ -1,0 +1,8 @@
+apiVersion: akutz.github.org/v1alpha2
+kind: Task
+metadata:
+  name: my-task
+spec:
+  id: v1a2-my-required-id
+  name: v1a2-my-optional-name
+  operationID: v1a2-my-required-op-id

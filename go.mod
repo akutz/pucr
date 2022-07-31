@@ -1,4 +1,4 @@
-module github.com/akutz/crds-the-hard-way/docs/04-conversion-webhook
+module github.com/akutz/crds-the-hard-way
 
 go 1.18
 
