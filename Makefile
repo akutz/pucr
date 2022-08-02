@@ -44,8 +44,8 @@ API_WEBHOOK_PATCH := api-webhook-patch.yaml
 RES_NAME := my-task
 RES_V1ALPHA1 := resource-v1alpha1.yaml
 RES_V1ALPHA2 := resource-v1alpha2.yaml
-RES_V1ALPHA1_URL := apis/akutz.github.org/v1alpha1/namespaces/default/tasks/$(RES_NAME)
-RES_V1ALPHA2_URL := apis/akutz.github.org/v1alpha2/namespaces/default/tasks/$(RES_NAME)
+RES_V1ALPHA1_URL := apis/akutz.github.com/v1alpha1/namespaces/default/tasks/$(RES_NAME)
+RES_V1ALPHA2_URL := apis/akutz.github.com/v1alpha2/namespaces/default/tasks/$(RES_NAME)
 RES_V1ALPHA1_PATCH := [{"op": "replace", "path": "/spec/id", "value": "v1a1-my-patched-id"}]
 RES_V1ALPHA2_PATCH := [{"op": "replace", "path": "/spec/id", "value": "v1a2-my-patched-id"}]
 
@@ -201,11 +201,11 @@ api-uninstall: ## Uninstall the tasks API
 
 .PHONY: kubectl-get-v1a1
 kubectl-get-v1a1: ## Get task resource at v1alpha1
-	$(KUBECTL) get tasks.v1alpha1.akutz.github.org/$(RES_NAME) -oyaml
+	$(KUBECTL) get tasks.v1alpha1.akutz.github.com/$(RES_NAME) -oyaml
 
 .PHONY: kubectl-get-v1a2
 kubectl-get-v1a2: ## Get task resource at v1alpha2
-	$(KUBECTL) get tasks.v1alpha2.akutz.github.org/$(RES_NAME) -oyaml
+	$(KUBECTL) get tasks.v1alpha2.akutz.github.com/$(RES_NAME) -oyaml
 
 .PHONY: kubectl-apply-v1a1
 kubectl-apply-v1a1: ## Apply task resource at v1alpha1

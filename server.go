@@ -35,9 +35,9 @@ func convertExampleCRD(fromObj *unstructured.Unstructured, toVersion string) (*u
 	}
 
 	switch fromVersion {
-	case "akutz.github.org/v1alpha1":
+	case "akutz.github.com/v1alpha1":
 		switch toVersion {
-		case "akutz.github.org/v1alpha2":
+		case "akutz.github.com/v1alpha2":
 			if v1a2JSON, ok := fromObj.GetAnnotations()["obj.v1alpha2"]; ok {
 				v1a2Obj := unstructured.Unstructured{Object: map[string]interface{}{}}
 				if err := gojson.Unmarshal([]byte(v1a2JSON), &v1a2Obj.Object); err != nil {
@@ -61,9 +61,9 @@ func convertExampleCRD(fromObj *unstructured.Unstructured, toVersion string) (*u
 		default:
 			return nil, statusErrorWithMessage("unexpected conversion version %q", toVersion)
 		}
-	case "akutz.github.org/v1alpha2":
+	case "akutz.github.com/v1alpha2":
 		switch toVersion {
-		case "akutz.github.org/v1alpha1":
+		case "akutz.github.com/v1alpha1":
 			fromSpec, ok, err := unstructured.NestedFieldCopy(fromObj.Object, "spec")
 			if err != nil {
 				return nil, statusErrorWithMessage("unexpected conversion error", err)
