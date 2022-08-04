@@ -4,7 +4,26 @@ This repository provides examples for the observed, unanticipated outcomes when 
 
 **What happened:**
 
-Patching and/or updating a custom resource at schema version `N-1` can erase the values of fields defined at version `N` (or subsequent versions) of the API depending on the client used and/or the presence of `x-kubernetes-preserve-unknown-fields: true` in the schema.
+Patching and/or updating a custom resource at schema version `N-1` can erase the values of fields defined at version `N` (or subsequent versions) of the API depending on the client used and/or the presence of `x-kubernetes-preserve-unknown-fields: true` in the schema. In fact, this issue goes on to illustrate the following outcomes:
+
+| `x-kubernetes-preserve-unknown-fields` | Client | Operation | Data preserved? |
+|:---:|:---:|:---:|:---:|
+| `true` | `kubectl` | apply |   |
+|   | `curl` | `UPDATE` | ✓ |
+|   | `curl` | `PATCH` | ✓ |
+|   | client-go _typed_ | `UPDATE` |   |
+|   | client-go _typed_ | `PATCH` |  ✓ |
+|   | client-go _unstructured_ | `UPDATE` | ✓ |
+|   | client-go _unstructured_ | `PATCH` | ✓ |
+| _undefined | `kubectl` | apply |   |
+|   | `curl` | `UPDATE` |   |
+|   | `curl` | `PATCH` |   |
+|   | client-go _typed_ | `UPDATE` |   |
+|   | client-go _typed_ | `PATCH` |   |
+|   | client-go _unstructured_ | `UPDATE` |   |
+|   | client-go _unstructured_ | `PATCH` |   |
+
+There is **major** potential for data loss. Simply put, regardless of the client used or the existence of `x-kubernetes-preserve-unknown-fields`, fields defined in later schema versions should not be deleted if a client is operating on a resource using an earlier version of the schema.
 
 **What you expected to happen:**
 
@@ -14,18 +33,15 @@ Patching and/or updating a resource at schema version `N-1` should _not_ erase t
 
 There are two ways to reproduce the issue:
 
-1. **Docker-in-docker** via the [`Dockerfile`](https://github.com/akutz/pucr/blob/main/Dockerfile) from [akutz/pucr](https://github.com/akutz/pucr)
+1. **Docker-in-docker** via a container
 1. **Natively** on the localhost
 
 Reproducing this issue utilizes the following software:
 
 * **Docker-in-docker**
   * [Docker](https://docs.docker.com/get-docker/) 20.10+
-  * [git](https://git-scm.com/downloads) 2.32+
 * **Natively**
   * [Docker](https://docs.docker.com/get-docker/) 20.10+
-  * [GNU Make](https://www.gnu.org/software/make/) 4.2+
-    * macOS ships with GNU Make ~3.81, which does not include support for the `file` function used by this project's `Makefile`. Please use homebrew and `brew install make` to install GNU Make 4.2+.
   * [Golang](https://go.dev/dl/) 1.18+
   * [jq](https://stedolan.github.io/jq/) 1.6+
   * [kind](https://kind.sigs.k8s.io) 0.11.1+
@@ -46,16 +62,88 @@ Due to the software requirements it is much easier to reproduce the issue using 
 
     * **Docker-in-docker**
 
-        1. Clone the repository:
+        1. Create a new `Dockerfile` with the following contents:
 
-            ```shell
-            git clone https://github.com/akutz/pucr
-            ```
-    
-        1. Change directories into the newly cloned repo:
-
-            ```shell
-            cd pucr
+            ```Dockerfile
+            FROM golang:1.18
+            
+            
+            ## --------------------------------------
+            ## Multi-platform support
+            ## --------------------------------------
+            
+            ARG TARGETOS
+            ARG TARGETARCH
+            
+            
+            ## --------------------------------------
+            ## Apt and standard packages
+            ## --------------------------------------
+            
+            RUN apt-get update -y && \
+                apt-get install -y --no-install-recommends \
+                curl jq openssl jq iproute2 iputils-ping tar vim
+            
+            
+            ## --------------------------------------
+            ## Install the docker client
+            ## --------------------------------------
+            
+            RUN mkdir -p /etc/apt/keyrings && \
+                chmod -R 0755 /etc/apt/keyrings && \
+                curl -fsSL "https://download.docker.com/linux/debian/gpg" | \
+                  gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg && \
+                chmod a+r /etc/apt/keyrings/docker.gpg && \
+                echo "deb [arch=${TARGETARCH} signed-by=/etc/apt/keyrings/docker.gpg] \
+                  https://download.docker.com/linux/debian \
+                  $(grep VERSION_CODENAME /etc/os-release | \
+                  awk -F= '{print $2}') stable" \
+                  >/etc/apt/sources.list.d/docker.list && \
+                apt-get update -y && \
+                DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker-ce-cli
+            
+            
+            ## --------------------------------------
+            ## Install yq since there's no apt pkg
+            ## --------------------------------------
+            
+            RUN curl -Lo /usr/bin/yq \
+                "https://github.com/mikefarah/yq/releases/download/v4.26.1/yq_linux_${TARGETARCH}" && \
+                chmod 0755 /usr/bin/yq
+            
+            
+            ## --------------------------------------
+            ## Install kubectl
+            ## --------------------------------------
+            
+            RUN curl -Lo /usr/bin/kubectl \
+              "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${TARGETARCH}/kubectl" && \
+              chmod 0755 /usr/bin/kubectl
+            
+            
+            ## --------------------------------------
+            ## Install kind
+            ## --------------------------------------
+            
+            RUN curl -Lo /usr/bin/kind \
+              "https://github.com/kubernetes-sigs/kind/releases/download/v0.14.0/kind-linux-${TARGETARCH}" && \
+              chmod 0755 /usr/bin/kind
+            
+            
+            ## --------------------------------------
+            ## Create a working directory.
+            ## --------------------------------------
+            
+            RUN mkdir /pucr
+            WORKDIR /pucr
+            
+            
+            ## --------------------------------------
+            ## Enter into a shell
+            ## --------------------------------------
+            
+            ENV DOCKER_IN_DOCKER=1
+            ENTRYPOINT ["/bin/bash"]
             ```
 
         1. Build the container image:
@@ -152,6 +240,241 @@ Due to the software requirements it is much easier to reproduce the issue using 
         ```
 
         If everything worked correctly then the above command _should_ print the YAML for the `default` namespace.
+
+1. Create the following files to define a Golang-based Kubernetes client that uses controller-runtime's typed and unstructured clients, which in turn use client-go:
+
+    * `go.mod`
+
+        ```
+        module github.com/akutz/pucr
+        
+        go 1.18
+        
+        require (
+        	github.com/go-logr/logr v1.2.3
+        	k8s.io/apimachinery v0.24.3
+        	sigs.k8s.io/controller-runtime v0.12.3
+        )
+        ```
+
+    * `client.go`
+
+        ```golang
+        //go:build client
+        // +build client
+        
+        package main
+        
+        import (
+        	"context"
+        	"flag"
+        	"os"
+        
+        	"github.com/go-logr/logr"
+        	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+        	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+        	"k8s.io/apimachinery/pkg/runtime"
+        	"k8s.io/apimachinery/pkg/runtime/schema"
+        	ctrl "sigs.k8s.io/controller-runtime"
+        	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+        	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
+        	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+        	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+        )
+        
+        var (
+        	log              logr.Logger
+        	flagPatch        bool
+        	flagUnstructured bool
+        	v1alpha1GVK      = schema.GroupVersionKind{
+        		Group:   "akutz.github.com",
+        		Version: "v1alpha1",
+        		Kind:    "Task",
+        	}
+        )
+        
+        func main() {
+        	// Init flags and the logger.
+        	ctrl.SetLogger(zap.New(func(o *zap.Options) { o.Development = true }))
+        	log = ctrl.Log.WithName("main")
+        	flag.BoolVar(
+        		&flagPatch,
+        		"patch",
+        		false,
+        		"indicates to perform a patch operation instead of an update",
+        	)
+        	flag.BoolVar(
+        		&flagUnstructured,
+        		"unstructured",
+        		false,
+        		"indicates to perform the operation using an unstructured object",
+        	)
+        	flag.Parse()
+        
+        	// Initialize the scheme.
+        	scheme := runtime.NewScheme()
+        	metav1.AddToGroupVersion(scheme, v1alpha1GVK.GroupVersion())
+        	scheme.AddKnownTypeWithName(v1alpha1GVK, &taskv1a1{})
+        
+        	// Get the REST config.
+        	config, err := ctrlconfig.GetConfigWithContext("kind-pucr")
+        	if err != nil {
+        		log.Error(err, "failed to get kubeconfig", "context", "kind-pucr")
+        		os.Exit(1)
+        	}
+        
+        	// Create a client.
+        	client, err := ctrlclient.New(config, ctrlclient.Options{Scheme: scheme})
+        	if err != nil {
+        		log.Error(err, "failed to create delegated client")
+        		os.Exit(1)
+        	}
+        
+        	if flagUnstructured {
+        		if flagPatch {
+        			log.Info("unstructured patch")
+        			untypedPatchV1A1(client)
+        		} else {
+        			log.Info("unstructured update")
+        			untypedUpdateV1A1(client)
+        		}
+        	} else {
+        		if flagPatch {
+        			log.Info("typed patch")
+        			typedPatchV1A1(client)
+        		} else {
+        			log.Info("typed update")
+        			typedUpdateV1A1(client)
+        		}
+        	}
+        }
+        
+        func typedUpdateV1A1(client ctrlclient.Client) {
+        	obj := &taskv1a1{
+        		ObjectMeta: metav1.ObjectMeta{
+        			Namespace: "default",
+        			Name:      "my-task",
+        		},
+        	}
+        	if _, err := controllerutil.CreateOrUpdate(
+        		context.Background(),
+        		client,
+        		obj,
+        		func() error {
+        			obj.Spec.ID = "my-updated-required-id"
+        			return nil
+        		}); err != nil {
+        		log.Error(err, "failed to update typed v1alpha1 task")
+        		os.Exit(1)
+        	}
+        }
+        
+        func typedPatchV1A1(client ctrlclient.Client) {
+        	obj := &taskv1a1{
+        		ObjectMeta: metav1.ObjectMeta{
+        			Namespace: "default",
+        			Name:      "my-task",
+        		},
+        	}
+        	if _, err := controllerutil.CreateOrPatch(
+        		context.Background(),
+        		client,
+        		obj,
+        		func() error {
+        			obj.Spec.ID = "my-patched-required-id"
+        			return nil
+        		}); err != nil {
+        		log.Error(err, "failed to patch typed v1alpha1 task")
+        		os.Exit(1)
+        	}
+        }
+        
+        func untypedUpdateV1A1(client ctrlclient.Client) {
+        	obj := &unstructured.Unstructured{Object: map[string]any{}}
+        	obj.SetGroupVersionKind(v1alpha1GVK)
+        	obj.SetNamespace("default")
+        	obj.SetName("my-task")
+        	if _, err := controllerutil.CreateOrUpdate(
+        		context.Background(),
+        		client,
+        		obj,
+        		func() error {
+        			unstructured.SetNestedField(
+        				obj.Object,
+        				"my-updated-required-id",
+        				"spec", "id",
+        			)
+        			return nil
+        		}); err != nil {
+        		log.Error(err, "failed to update unstructured v1alpha1 task")
+        		os.Exit(1)
+        	}
+        }
+        
+        func untypedPatchV1A1(client ctrlclient.Client) {
+        	obj := &unstructured.Unstructured{Object: map[string]any{}}
+        	obj.SetGroupVersionKind(v1alpha1GVK)
+        	obj.SetNamespace("default")
+        	obj.SetName("my-task")
+        	if _, err := controllerutil.CreateOrPatch(
+        		context.Background(),
+        		client,
+        		obj,
+        		func() error {
+        			unstructured.SetNestedField(
+        				obj.Object,
+        				"my-updated-required-id",
+        				"spec", "id",
+        			)
+        			return nil
+        		}); err != nil {
+        		log.Error(err, "failed to patch unstructured v1alpha1 task")
+        		os.Exit(1)
+        	}
+        }
+        
+        type taskv1a1spec struct {
+        	ID string `json:"id"`
+        }
+        
+        type taskv1a1 struct {
+        	metav1.TypeMeta   `json:",inline"`
+        	metav1.ObjectMeta `json:"metadata,omitempty"`
+        
+        	Spec   taskv1a1spec `json:"spec,omitempty"`
+        	Status struct{}     `json:"status,omitempty"`
+        }
+        
+        func (src *taskv1a1) DeepCopyObject() runtime.Object {
+        	var dst taskv1a1
+        	dst = *src
+        	dst.SetGroupVersionKind(src.GroupVersionKind())
+        	dst.Spec = src.Spec
+        	dst.SetName(src.GetName())
+        	dst.SetNamespace(src.GetNamespace())
+        	if srcMap := src.GetAnnotations(); srcMap != nil {
+        		dstMap := map[string]string{}
+        		for k, v := range srcMap {
+        			dstMap[k] = v
+        		}
+        		dst.SetAnnotations(dstMap)
+        	}
+        	if srcMap := src.GetLabels(); srcMap != nil {
+        		dstMap := map[string]string{}
+        		for k, v := range srcMap {
+        			dstMap[k] = v
+        		}
+        		dst.SetLabels(dstMap)
+        	}
+        	return &dst
+        }
+        ```
+
+1. Update the Go modules:
+
+    ```shell
+    go mod tidy
+    ```
 
 1. Install the `tasks.akutz.github.com` CRD:
 
@@ -299,10 +622,14 @@ Due to the software requirements it is much easier to reproduce the issue using 
     EOF
     ```
 
-1. With `kubectl`, create a new `tasks` resource at schema version `v1alpha2`:
+1. Create the following alias to make it easy to delete and reset an example `tasks` resource to a known set of baseline properties:
 
     ```shell
-    cat <<EOF | kubectl apply -f -
+    cat <<EOF | \
+      yq -ojson | \
+      jq -c | \
+      TASK=$(tee) && \
+      alias reset-task='kubectl delete --ignore-not-found task my-task && echo "'"${TASK}"'" | kubectl apply -f -'
     apiVersion: akutz.github.com/v1alpha2
     kind: Task
     metadata:
@@ -314,140 +641,412 @@ Due to the software requirements it is much easier to reproduce the issue using 
     EOF
     ```
 
-1. Print the resource to illustrate everything that should be there _is_ there:
+    Now the command `reset-task` can be used to quickly delete and create a `tasks` resource at `v1alpha2` named `my-task.
 
-    ```shell
-    $ kubectl get task my-task
-    NAME      ID               DISPLAY NAME       OPERATIONID
-    my-task   my-required-id   my-optional-name   my-required-op-id
-    ```
+1. With `x-kubernetes-preserve-unknown-fields: true` enabled for the `spec` property at version `v1alpha1` of the `tasks` API:
 
-1. With `kubectl`, reconfigure the `tasks` resource, this time at schema version `v1alpha1`:
+    1. Validate `kubectl`:
 
-    ```shell
-    cat <<EOF | kubectl apply -f -
-    apiVersion: akutz.github.com/v1alpha1
-    kind: Task
-    metadata:
-      name: my-task
-    spec:
-      id: my-updated-required-id
-    EOF
-    ```
+        1. Create a new `tasks` resource at `v1alpha2`:
+    
+            ```shell
+            reset-task
+            ```
+    
+        1. Print the resource to illustrate everything that should be there _is_ there:
+    
+            ```shell
+            $ kubectl get task my-task
+            NAME      ID               DISPLAY NAME       OPERATIONID
+            my-task   my-required-id   my-optional-name   my-required-op-id
+            ```
+    
+        1. With `kubectl`, reconfigure the `tasks` resource, this time at schema version `v1alpha1`:
+    
+            ```shell
+            cat <<EOF | kubectl apply -f -
+            apiVersion: akutz.github.com/v1alpha1
+            kind: Task
+            metadata:
+              name: my-task
+            spec:
+              id: my-updated-required-id
+            EOF
+            ```
+    
+        1. Print the resource once again, revealing the values for fields defined in the `tasks` CRD at version `v1alpha2` have been removed from the resource:
+    
+            ```shell
+            $ kubectl get task my-task
+            NAME      ID                       DISPLAY NAME   OPERATIONID
+            my-task   my-updated-required-id 
+            ```
+    
+        1. Just to be sure, explicitly request the `v1alpha2` verison of the resource:
+    
+            ```shell
+            $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+            NAME      ID                       DISPLAY NAME   OPERATIONID
+            my-task   my-updated-required-id 
+            ```
+    
+        1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+    
+            ```shell
+            reset-task
+            ```
+    
+        1. Assert the missing fields have been restored:
+    
+            ```shell
+            $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+            NAME      ID               DISPLAY NAME       OPERATIONID
+            my-task   my-required-id   my-optional-name   my-required-op-id
+            ```
 
-1. Print the resource once again, revealing the values for fields defined in the `tasks` CRD at version `v1alpha2` have been removed from the resource:
+    1. Validate `curl`:
 
-    ```shell
-    $ kubectl get task my-task
-    NAME      ID                       DISPLAY NAME   OPERATIONID
-    my-task   my-updated-required-id 
-    ```
+        1. An `UPDATE` operation:
 
-1. Just to be sure, explicitly request the `v1alpha2` verison of the resource:
+            1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                ```shell
+                reset-task
+                ```
 
-    ```shell
-    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
-    NAME      ID                       DISPLAY NAME   OPERATIONID
-    my-task   my-updated-required-id 
-    ```
+            1. With `curl`, update the resource at `v1alpha1`:
 
-1. Reapply the resource at `v1alpha2` to restore the missing fields:
+                ```shell
+                curl --cacert ca.crt --cert client.crt --key client.key \
+                     --silent --show-error \
+                     -XGET -H 'Accept: application/json' \
+                     "$(cat url.txt)/apis/akutz.github.com/v1alpha1/namespaces/default/tasks/my-task" | \
+                jq '.spec.id="my-updated-required-id"' | \
+                curl --cacert ca.crt --cert client.crt --key client.key \
+                     --silent --show-error \
+                     -XPUT -H 'Content-Type: application/json' -H 'Accept: application/json' -d @- \
+                     "$(cat url.txt)/apis/akutz.github.com/v1alpha1/namespaces/default/tasks/my-task"
+                ```
 
-    ```shell
-    cat <<EOF | kubectl apply -f -
-    apiVersion: akutz.github.com/v1alpha2
-    kind: Task
-    metadata:
-      name: my-task
-    spec:
-      id: my-updated-required-id
-      name: my-optional-name
-      operationID: my-required-op-id
-    EOF
-    ```
+            1. Assert the operation did not remove the fields defined at `v1alpha2`:
+        
+                ```shell
+                $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                NAME      ID                       DISPLAY NAME       OPERATIONID
+                my-task   my-updated-required-id   my-optional-name   my-required-op-id
+                ```
 
-1. Assert the missing fields have been restored:
+        1. A `PATCH` operation:
 
-    ```shell
-    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
-    NAME      ID                       DISPLAY NAME       OPERATIONID
-    my-task   my-updated-required-id   my-optional-name   my-required-op-id
-    ```
+            1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                ```shell
+                reset-task
+                ```
 
-1. With `curl`, update the resource at `v1alpha1`:
+            1. With `curl`, patch the resource at `v1alpha1`:
 
-    ```shell
-    curl --cacert ca.crt --cert client.crt --key client.key \
-         --silent --show-error \
-         -XGET -H 'Accept: application/json' \
-         "$(cat url.txt)/apis/akutz.github.com/v1alpha1/namespaces/default/tasks/my-task" | \
-    jq '.spec.id="my-twice-updated-required-id"' | \
-    curl --cacert ca.crt --cert client.crt --key client.key \
-         --silent --show-error \
-         -XPUT -H 'Content-Type: application/json' -H 'Accept: application/json' -d @- \
-         "$(cat url.txt)/apis/akutz.github.com/v1alpha1/namespaces/default/tasks/my-task"
-    ```
+                ```shell
+                curl --cacert ca.crt --cert client.crt --key client.key \
+                     --silent --show-error \
+                     -XPATCH -H 'Accept: application/json' -H 'Content-Type: application/json-patch+json' \
+                     -d '[{"op": "replace", "path": "/spec/id", "value": "my-patched-required-id"}]' \
+                     "$(cat url.txt)/apis/akutz.github.com/v1alpha1/namespaces/default/tasks/my-task"
+                ```
 
-1. Print the resource, explicitly at `v1alpha2`, to reveal that an `UPDATE` operation with `curl` against the `v1alpha1` version of the resource does __not__ overwrite the values for fields defined at `v1alpha2`:
+            1. Assert the operation did not remove the fields defined at `v1alpha2`:
+        
+                ```shell
+                $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                NAME      ID                       DISPLAY NAME       OPERATIONID
+                my-task   my-patched-required-id   my-optional-name   my-required-op-id
+                ```
 
-    ```shell
-    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
-    NAME      ID                             DISPLAY NAME       OPERATIONID
-    my-task   my-twice-updated-required-id   my-optional-name   my-required-op-id
-    ```
+    1. Validate Golang / client-go / controller-runtime:
 
-1. With `curl`, patch the resource at `v1alpha1`:
+        1. A typed client:
 
-    ```shell
-    curl --cacert ca.crt --cert client.crt --key client.key \
-         --silent --show-error \
-         -XPATCH -H 'Accept: application/json' -H 'Content-Type: application/json-patch+json' \
-         -d '[{"op": "replace", "path": "/spec/id", "value": "my-patched-required-id"}]' \
-         "$(cat url.txt)/apis/akutz.github.com/v1alpha1/namespaces/default/tasks/my-task"
-    ```
+            1. An `UPDATE` operation:
 
-1. Assert the patch did not affect the fields defined at `v1alpha2`:
+                1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                    ```shell
+                    reset-task
+                    ```
 
-    ```shell
-    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
-    NAME      ID                       DISPLAY NAME       OPERATIONID
-    my-task   my-patched-required-id   my-optional-name   my-required-op-id
-    ```
+                1. With `client.go`, update the resource at `v1alpha1`:
+                
+                    ```shell
+                    go run -tags client client.go
+                    ```
 
----
+                1. Assert the operation resulted in data loss for fields defined at `v1alpha2`:
 
-:warning: _The potential for data loss_
+                    ```shell
+                    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                    NAME      ID                       DISPLAY NAME       OPERATIONID
+                    my-task   my-updated-required-id
+                    ```
 
-With `kubectl` the value of `x-kubernetes-preserve-unknown-fields` makes no difference: reconfiguring a resource at schema version `N-1` can result in the loss of data for fields defined in schema version `N`.
+            1. A `PATCH` operation:
 
-With `curl`, as long as `x-kubernetes-preserve-unknown-fields` is `true` on the `spec` for schema version `N-1`, neither `UPDATE` nor `PATCH` operations with `curl` are  destructive.
+                1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                    ```shell
+                    reset-task
+                    ```
 
-However, if `x-kubernetes-preserve-unknown-fields: true` is removed from the `N-1` CRD's `spec` field, then forget about whether an `UPDATE` with `curl` is destructive, even a surgical `PATCH` operation with `curl` against the resource at schema version `N-1` results in the loss of data.
+                1. With `client.go`, patch the resource at `v1alpha1`:
+                
+                    ```shell
+                    go run -tags client client.go -patch
+                    ```
 
----
+                1. Assert the operation did _not_ result in data loss for fields defined at `v1alpha2`:
 
-1. Remove `x-kubernetes-preserve-unknown-fields: true` from the `v1alpha1` CRD's `spec` field:
+                    ```shell
+                    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                    NAME      ID                       DISPLAY NAME       OPERATIONID
+                    my-task   my-patched-required-id   my-optional-name   my-required-op-id
+                    ```
+
+        1. An unstructured client:
+
+            1. An `UPDATE` operation:
+
+                1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                    ```shell
+                    reset-task
+                    ```
+
+                1. With `client.go`, update the resource at `v1alpha1`:
+                
+                    ```shell
+                    go run -tags client client.go -unstructured
+                    ```
+
+                1. Assert the operation did _not_ result in data loss for fields defined at `v1alpha2`:
+
+                    ```shell
+                    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                    NAME      ID                       DISPLAY NAME       OPERATIONID
+                    my-task   my-updated-required-id   my-optional-name   my-required-op-id
+                    ```
+
+            1. A `PATCH` operation:
+
+                1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                    ```shell
+                    reset-task
+                    ```
+
+                1. With `client.go`, patch the resource at `v1alpha1`:
+                
+                    ```shell
+                    go run -tags client client.go -unstructured -patch
+                    ```
+
+                1. Assert the operation did _not_ result in data loss for fields defined at `v1alpha2`:
+
+                    ```shell
+                    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                    NAME      ID                       DISPLAY NAME       OPERATIONID
+                    my-task   my-patched-required-id   my-optional-name   my-required-op-id
+                    ```
+
+1. Next, disable the preservation of unknown fields for the `spec` property in the `v1alpha1` CRD:
 
     ```shell
     $ kubectl get crd tasks.akutz.github.com -ojson | \
-      jq 'del( ( .spec.versions[] ) | select(.name == "v1alpha1").schema.openAPIV3Schema.properties.spec."x-kubernetes-preserve-unknown-fields")' | \
+      jq 'del((.spec.versions[] | select(.name == "v1alpha1")).schema.openAPIV3Schema.properties.spec."x-kubernetes-preserve-unknown-fields")' | \
       kubectl apply -f -
     ```
 
-1. With `curl`, patch the resource at `v1alpha1`:
+1. With `x-kubernetes-preserve-unknown-fields` no longer enabled, validate the following:
 
-    ```shell
-    curl --cacert ca.crt --cert client.crt --key client.key \
-         --silent --show-error \
-         -XPATCH -H 'Accept: application/json' -H 'Content-Type: application/json-patch+json' \
-         -d '[{"op": "replace", "path": "/spec/id", "value": "my-twice-patched-required-id"}]' \
-         "$(cat url.txt)/apis/akutz.github.com/v1alpha1/namespaces/default/tasks/my-task"
-    ```
+    1. Validate `kubectl`:
 
-1. Assert the patch resulted in data loss for fields defined at `v1alpha2`:
+        1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+            ```shell
+            reset-task
+            ```
+    
+        1. With `kubectl`, reconfigure the `tasks` resource, this time at schema version `v1alpha1`:
+    
+            ```shell
+            cat <<EOF | kubectl apply -f -
+            apiVersion: akutz.github.com/v1alpha1
+            kind: Task
+            metadata:
+              name: my-task
+            spec:
+              id: my-updated-required-id
+            EOF
+            ```
+        
+        1. Assert the operation resulted in data loss for fields defined at `v1alpha2`:
 
-    ```shell
-    $  kubectl get tasks.v1alpha2.akutz.github.com/my-task
-    NAME      ID                             DISPLAY NAME   OPERATIONID
-    my-task   my-twice-patched-required-id
-    ```
+            ```shell
+            $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+            NAME      ID                       DISPLAY NAME       OPERATIONID
+            my-task   my-updated-required-id
+            ```
+
+    1. Validate `curl`:
+
+        1. An `UPDATE` operation:
+
+            1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                ```shell
+                reset-task
+                ```
+
+            1. With `curl`, update the resource at `v1alpha1`:
+
+                ```shell
+                curl --cacert ca.crt --cert client.crt --key client.key \
+                     --silent --show-error \
+                     -XGET -H 'Accept: application/json' \
+                     "$(cat url.txt)/apis/akutz.github.com/v1alpha1/namespaces/default/tasks/my-task" | \
+                jq '.spec.id="my-updated-required-id"' | \
+                curl --cacert ca.crt --cert client.crt --key client.key \
+                     --silent --show-error \
+                     -XPUT -H 'Content-Type: application/json' -H 'Accept: application/json' -d @- \
+                     "$(cat url.txt)/apis/akutz.github.com/v1alpha1/namespaces/default/tasks/my-task"
+                ```
+
+            1. Assert the operation resulted in data loss for fields defined at `v1alpha2`:
+
+                ```shell
+                $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                NAME      ID                       DISPLAY NAME       OPERATIONID
+                my-task   my-updated-required-id
+                ```
+
+        1. A `PATCH` operation:
+
+            1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                ```shell
+                reset-task
+                ```
+
+            1. With `curl`, patch the resource at `v1alpha1`:
+
+                ```shell
+                curl --cacert ca.crt --cert client.crt --key client.key \
+                     --silent --show-error \
+                     -XPATCH -H 'Accept: application/json' -H 'Content-Type: application/json-patch+json' \
+                     -d '[{"op": "replace", "path": "/spec/id", "value": "my-patched-required-id"}]' \
+                     "$(cat url.txt)/apis/akutz.github.com/v1alpha1/namespaces/default/tasks/my-task"
+                ```
+
+            1. Assert the operation resulted in data loss for fields defined at `v1alpha2`:
+
+                ```shell
+                $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                NAME      ID                       DISPLAY NAME       OPERATIONID
+                my-task   my-patched-required-id
+                ```
+
+    1. Validate Golang / client-go / controller-runtime:
+
+        1. A typed client:
+
+            1. An `UPDATE` operation:
+
+                1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                    ```shell
+                    reset-task
+                    ```
+
+                1. With `client.go`, update the resource at `v1alpha1`:
+                
+                    ```shell
+                    go run -tags client client.go
+                    ```
+
+                1. Assert the operation resulted in data loss for fields defined at `v1alpha2`:
+
+                    ```shell
+                    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                    NAME      ID                       DISPLAY NAME       OPERATIONID
+                    my-task   my-updated-required-id
+                    ```
+
+            1. A `PATCH` operation:
+
+                1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                    ```shell
+                    reset-task
+                    ```
+
+                1. With `client.go`, patch the resource at `v1alpha1`:
+                
+                    ```shell
+                    go run -tags client client.go -patch
+                    ```
+
+                1. Assert the operation resulted in data loss for fields defined at `v1alpha2`:
+
+                    ```shell
+                    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                    NAME      ID                       DISPLAY NAME       OPERATIONID
+                    my-task   my-patched-required-id
+                    ```
+
+        1. An unstructured client:
+
+            1. An `UPDATE` operation:
+
+                1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                    ```shell
+                    reset-task
+                    ```
+
+                1. With `client.go`, update the resource at `v1alpha1`:
+                
+                    ```shell
+                    go run -tags client client.go -unstructured
+                    ```
+
+                1. Assert the operation resulted in data loss for fields defined at `v1alpha2`:
+
+                    ```shell
+                    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                    NAME      ID                       DISPLAY NAME       OPERATIONID
+                    my-task   my-updated-required-id
+                    ```
+
+            1. A `PATCH` operation:
+
+                1. Delete the resource and recreate it at `v1alpha2` to reset to baseline:
+            
+                    ```shell
+                    reset-task
+                    ```
+
+                1. With `client.go`, patch the resource at `v1alpha1`:
+                
+                    ```shell
+                    go run -tags client client.go -unstructured -patch
+                    ```
+
+                1. Assert the operation resulted in data loss for fields defined at `v1alpha2`:
+
+                    ```shell
+                    $ kubectl get tasks.v1alpha2.akutz.github.com/my-task
+                    NAME      ID                       DISPLAY NAME       OPERATIONID
+                    my-task   my-patched-required-id
+                    ```
+
+**Anything else we need to know?**:
+
+_NA_
